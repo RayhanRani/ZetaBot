@@ -109,83 +109,8 @@ def build_dashboard(data_dir: Path = None):
         initial_sidebar_state="expanded",
     )
     st.title("Kalshi Trends Dashboard")
-    st.caption("All ongoing Kalshi markets - live data")
 
-    data_path = _get_data_dir()
-    with st.sidebar:
-        st.caption("Data path: " + str(data_path))
-        if st.button("Refresh data", help="Fetch fresh data from Kalshi API"):
-            with st.spinner("Fetching all open markets..."):
-                try:
-                    fresh = fetch_fresh_events(data_path)
-                    st.success(f"Loaded {len(fresh)} markets")
-                    st.rerun()
-                except Exception as e:
-                    st.error(str(e))
-
-    # Load data - prefer fresh fetch on first load if cache empty
-    try:
-        data = load_dashboard_data(data_dir)
-        events_df = data["events"]
-        if events_df is None or events_df.empty:
-            with st.spinner("Fetching data from Kalshi API..."):
-                events_df = fetch_fresh_events(data_path)
-                data["events"] = events_df
-    except Exception as e:
-        st.error(f"Failed to load data: {e}")
-        import traceback
-        with st.expander("Error details"):
-            st.code(traceback.format_exc())
-        return
-
-    if events_df is None or events_df.empty:
-        st.warning("No data found. Click 'Refresh data' in the sidebar to fetch from Kalshi.")
-        return
-
-    # Ensure event_title for sub-category
-    if "event_title" not in events_df.columns and "event_ticker" in events_df.columns:
-        events_df = events_df.copy()
-        events_df["event_title"] = events_df["event_ticker"]
-    if "event_title" not in events_df.columns:
-        events_df = events_df.copy()
-        events_df["event_title"] = events_df.get("title", "Unknown")
-
-    # Compute edge/pattern on the fly if not in storage
-    if data.get("bid_ask_edge") is None or data["bid_ask_edge"].empty:
-        from .analysis.edge import compute_bid_ask_edge, rank_by_edge
-        data["bid_ask_edge"] = rank_by_edge(events_df, min_liquidity=500)
-        if data["bid_ask_edge"].empty:
-            data["bid_ask_edge"] = compute_bid_ask_edge(events_df)
-    if data.get("pattern_ranked") is None or data["pattern_ranked"].empty:
-        pr = events_df.copy()
-        pr["move_from_neutral"] = abs(pr["last_price"] - 50) if "last_price" in pr.columns else 0
-        if "volume" in pr.columns:
-            pr["signal_strength"] = (pr["move_from_neutral"] * pr["volume"]).fillna(0)
-        else:
-            pr["signal_strength"] = pr["move_from_neutral"]
-        pr = pr.nlargest(min(30, len(pr)), "signal_strength")
-        data["pattern_ranked"] = pr
-
-    # Build unified table
-    table_df = _build_unified_table(events_df, data)
-
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Markets", len(table_df))
-    with col2:
-        sub_cats = table_df["sub_category"].nunique() if "sub_category" in table_df.columns else 0
-        st.metric("Events / Sub-categories", sub_cats)
-    with col3:
-        vol = table_df["volume"].sum() if "volume" in table_df.columns else 0
-        st.metric("Total Volume", f"{vol:,.0f}")
-    with col4:
-        avg_price = table_df["last_price"].mean() if "last_price" in table_df.columns else 0
-        st.metric("Avg Implied Prob", f"{avg_price:.1f}¢")
-
-    st.divider()
-
-    # Column glossary - explain each term at the top
+    # Column glossary - explain each term
     glossary = {
         "sub_category": "Event or question. Markets in the same event are grouped together.",
         "ticker": "Unique ID for this market contract.",
@@ -215,40 +140,6 @@ def build_dashboard(data_dir: Path = None):
         for col, desc in items[mid:]:
             st.markdown(f"**{col}** — {desc}")
 
-    st.divider()
-
-    # Data table with sub-category grouping
-    st.header("All Ongoing Bets")
-    display_cols = [
-        "sub_category", "ticker", "title", "category",
-        "last_price", "volume", "volume_24h", "open_interest",
-        "mid", "spread", "edge_score", "buy_yes_edge", "sell_yes_edge",
-        "signal_strength", "cluster",
-    ]
-    display_cols = [c for c in display_cols if c in table_df.columns]
-    table_display = table_df[display_cols].copy()
-
-    # Rename price column for clarity
-    if "last_price" in table_display.columns:
-        table_display = table_display.rename(columns={"last_price": "implied_prob_cents"})
-
-    # Round numeric columns
-    for c in table_display.columns:
-        if table_display[c].dtype in ["float64", "float32"]:
-            table_display[c] = table_display[c].round(2)
-
-    # Sort by sub_category then by volume
-    if "sub_category" in table_display.columns:
-        sort_cols = ["sub_category", "volume"] if "volume" in table_display.columns else ["sub_category"]
-        asc = [True, False] if len(sort_cols) == 2 else [True]
-        table_display = table_display.sort_values(sort_cols, ascending=asc)
-
-    with st.expander("View all data (click to expand/collapse)", expanded=True):
-        st.dataframe(table_display, use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.caption("Data from Kalshi API - Click 'Refresh data' in sidebar to update.")
-
 
 def run_server(host: str = "0.0.0.0", port: int = 8501, data_dir: str = "data"):
     """Run Streamlit dashboard."""
@@ -258,7 +149,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8501, data_dir: str = "data"):
     sys.argv = [
         "streamlit",
         "run",
-        str(Path(__file__).parent.parent / "run_dashboard.py"),
+        str(Path(__file__).parent.parent / "dashboard.py"),
         "--server.address",
         host,
         "--server.port",

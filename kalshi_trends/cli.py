@@ -222,7 +222,7 @@ def cmd_serve(args) -> None:
     import sys
 
     project_root = Path(__file__).resolve().parent.parent
-    dashboard_path = project_root / "run_dashboard.py"
+    dashboard_path = project_root / "dashboard.py"
     cmd = [
         sys.executable,
         "-m",
