@@ -140,6 +140,38 @@ class KalshiDataClient:
             except:
                 pass
 
+    def _post(self, path: str, body: dict) -> dict:
+        """POST request with retry, rate limiting, auth."""
+        def _do():
+            self._throttle()
+            headers = {"Content-Type": "application/json"}
+            if self._private_key and os.environ.get("KALSHI_API_KEY_ID"):
+                headers.update(_sign_request(self._private_key, "POST", path))
+            if self._http_client is None:
+                self._http_client = httpx.Client(timeout=self.timeout)
+            resp = self._http_client.post(
+                f"{self.base_url}{path}", json=body, headers=headers
+            )
+            resp.raise_for_status()
+            return resp.json()
+        return _retry_with_backoff(_do)
+
+    def _delete(self, path: str) -> dict:
+        """DELETE request with retry, rate limiting, auth."""
+        def _do():
+            self._throttle()
+            headers = {}
+            if self._private_key and os.environ.get("KALSHI_API_KEY_ID"):
+                headers = _sign_request(self._private_key, "DELETE", path)
+            if self._http_client is None:
+                self._http_client = httpx.Client(timeout=self.timeout)
+            resp = self._http_client.delete(
+                f"{self.base_url}{path}", headers=headers or None
+            )
+            resp.raise_for_status()
+            return resp.json()
+        return _retry_with_backoff(_do)
+
     def get_markets(
         self,
         limit: int = 200,
@@ -386,3 +418,78 @@ class KalshiDataClient:
             "period_interval": period_interval,
         }
         return self._get(path, params)
+
+    # ---- Order book ----
+
+    def get_market_orderbook(self, ticker: str, depth: int = 10) -> dict:
+        """Fetch order book for a market. Returns {orderbook: {yes: [...], no: [...]}}."""
+        return self._get(f"/markets/{ticker}/orderbook", {"depth": depth})
+
+    # ---- Portfolio (auth required) ----
+
+    def get_portfolio_orders(
+        self,
+        status: Optional[str] = None,
+        ticker: Optional[str] = None,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """Fetch portfolio orders. status: 'resting', 'executed', 'cancelled', 'all'."""
+        params: dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        if ticker:
+            params["ticker"] = ticker
+        if cursor:
+            params["cursor"] = cursor
+        return self._get("/portfolio/orders", params)
+
+    def get_portfolio_positions(
+        self,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """Fetch portfolio positions. Returns {market_positions, event_positions, cursor}."""
+        params: dict[str, Any] = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        return self._get("/portfolio/positions", params)
+
+    def create_order(
+        self,
+        ticker: str,
+        action: str,
+        side: str,
+        count: int,
+        order_type: str = "limit",
+        yes_price: Optional[int] = None,
+        no_price: Optional[int] = None,
+        client_order_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Place an order. Returns the created order object.
+        action: 'buy' or 'sell'
+        side: 'yes' or 'no'
+        count: number of contracts
+        order_type: 'limit' or 'market'
+        yes_price: price in cents (1–99) when buying/selling YES
+        no_price: price in cents (1–99) when buying/selling NO
+        """
+        body: dict[str, Any] = {
+            "ticker": ticker,
+            "action": action,
+            "side": side,
+            "count": count,
+            "type": order_type,
+        }
+        if yes_price is not None:
+            body["yes_price"] = yes_price
+        if no_price is not None:
+            body["no_price"] = no_price
+        if client_order_id:
+            body["client_order_id"] = client_order_id
+        return self._post("/portfolio/orders", body)
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel a resting order by ID."""
+        return self._delete(f"/portfolio/orders/{order_id}")
